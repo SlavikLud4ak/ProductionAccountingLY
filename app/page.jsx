@@ -19,7 +19,9 @@ import {
   AlertCircle,
   ChevronDown,
   Link as LinkIcon,
-  Check
+  Check,
+  Loader2,
+  RefreshCw
 } from 'lucide-react'
 import { 
   BarChart, 
@@ -35,25 +37,9 @@ import {
   Pie,
   Cell
 } from 'recharts'
+import { supabase } from './lib/supabase'
 
-// ==================== MOCK DATA (для демо без Supabase) ====================
-const INITIAL_EMPLOYEES = [
-  { id: 1, name: 'Тарас Ільків', position: 'Монтажник' },
-  { id: 2, name: 'Марія Коваль', position: 'Монтажник' },
-  { id: 3, name: 'Петро Шевченко', position: 'Старший монтажник' },
-]
-
-const INITIAL_INVENTORY = [
-  { id: 1, name: "Роз'єм USB Type-C", quantity: 500, unit: 'шт', min_quantity: 100 },
-  { id: 2, name: 'Перемикач тактовий', quantity: 300, unit: 'шт', min_quantity: 50 },
-  { id: 3, name: 'Контакти позолочені', quantity: 1000, unit: 'шт', min_quantity: 200 },
-  { id: 4, name: 'Лак захисний', quantity: 50, unit: 'л', min_quantity: 10 },
-  { id: 5, name: 'Батарея Li-Ion 3.7V', quantity: 200, unit: 'шт', min_quantity: 50 },
-  { id: 6, name: 'Клей епоксидний', quantity: 30, unit: 'шт', min_quantity: 5 },
-  { id: 7, name: 'Контакти для штампування', quantity: 2000, unit: 'шт', min_quantity: 500 },
-  { id: 8, name: 'Запобіжник 5A', quantity: 400, unit: 'шт', min_quantity: 100 },
-]
-
+// ==================== CONSTANTS ====================
 const STAGE_PRICES = {
   vtk: 15,
   soldering: 27,
@@ -125,23 +111,33 @@ function Sidebar({ activeTab, setActiveTab }) {
   )
 }
 
+// ==================== LOADING SPINNER ====================
+function LoadingSpinner() {
+  return (
+    <div className="flex items-center justify-center py-12">
+      <Loader2 className="w-8 h-8 text-sky-500 animate-spin" />
+    </div>
+  )
+}
+
 // ==================== DASHBOARD ====================
-function Dashboard({ routeSheets, employees, inventory }) {
+function Dashboard({ routeSheets, employees, inventory, loading }) {
+  if (loading) return <LoadingSpinner />
+  
   const now = new Date()
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
   
   const weekSheets = routeSheets.filter(s => new Date(s.created_at) >= weekAgo)
-  const totalEarnings = routeSheets.reduce((sum, s) => sum + (s.total_amount || 0), 0)
-  const weekEarnings = weekSheets.reduce((sum, s) => sum + (s.total_amount || 0), 0)
+  const totalEarnings = routeSheets.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0)
+  const weekEarnings = weekSheets.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0)
   const totalDefects = routeSheets.reduce((sum, s) => sum + (s.defect_count || 0), 0)
   const lowInventory = inventory.filter(i => i.quantity <= i.min_quantity).length
   
-  // Дані для графіка по працівниках
   const employeeStats = employees.map(emp => {
     const empSheets = routeSheets.filter(s => s.employee_id === emp.id)
     return {
       name: emp.name.split(' ')[0],
-      earnings: empSheets.reduce((sum, s) => sum + (s.total_amount || 0), 0),
+      earnings: empSheets.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0),
       sheets: empSheets.length,
       defects: empSheets.reduce((sum, s) => sum + (s.defect_count || 0), 0),
     }
@@ -153,7 +149,6 @@ function Dashboard({ routeSheets, employees, inventory }) {
     <div className="animate-fadeIn">
       <h2 className="text-2xl font-bold text-white mb-6">Дашборд</h2>
       
-      {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <div className="stat-card">
           <div className="flex items-center justify-between">
@@ -192,7 +187,6 @@ function Dashboard({ routeSheets, employees, inventory }) {
         </div>
       </div>
       
-      {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="card">
           <h3 className="text-lg font-semibold text-white mb-4">Заробіток по працівниках</h3>
@@ -219,7 +213,7 @@ function Dashboard({ routeSheets, employees, inventory }) {
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
               <Pie
-                data={employeeStats}
+                data={employeeStats.filter(e => e.sheets > 0)}
                 dataKey="sheets"
                 nameKey="name"
                 cx="50%"
@@ -243,7 +237,6 @@ function Dashboard({ routeSheets, employees, inventory }) {
         </div>
       </div>
       
-      {/* Recent Activity */}
       <div className="card mt-6">
         <h3 className="text-lg font-semibold text-white mb-4">Останні маршрутні листи</h3>
         <div className="space-y-3">
@@ -263,7 +256,7 @@ function Dashboard({ routeSheets, employees, inventory }) {
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-emerald-400 font-semibold">{sheet.total_amount?.toFixed(2)}₴</p>
+                  <p className="text-emerald-400 font-semibold">{parseFloat(sheet.total_amount || 0).toFixed(2)}₴</p>
                   {sheet.defect_count > 0 && (
                     <p className="text-xs text-amber-400">Брак: {sheet.defect_count}</p>
                   )}
@@ -271,6 +264,9 @@ function Dashboard({ routeSheets, employees, inventory }) {
               </div>
             )
           })}
+          {routeSheets.length === 0 && (
+            <p className="text-zinc-500 text-center py-4">Немає маршрутних листів</p>
+          )}
         </div>
       </div>
     </div>
@@ -278,10 +274,10 @@ function Dashboard({ routeSheets, employees, inventory }) {
 }
 
 // ==================== ROUTE SHEETS ====================
-function RouteSheets({ routeSheets, setRouteSheets, employees, inventory, setInventory }) {
+function RouteSheets({ routeSheets, setRouteSheets, employees, inventory, setInventory, loading, refreshData }) {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingSheet, setEditingSheet] = useState(null)
-  const [selectedMaterials, setSelectedMaterials] = useState({})
+  const [saving, setSaving] = useState(false)
   const [formData, setFormData] = useState({
     employee_id: '',
     vtk_count: 0,
@@ -302,7 +298,6 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, inventory, setInv
       fuse_soldering_count: 0,
       defect_count: 0,
     })
-    setSelectedMaterials({})
     setEditingSheet(null)
   }
 
@@ -311,95 +306,114 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, inventory, setInv
       setEditingSheet(sheet)
       setFormData({
         employee_id: sheet.employee_id,
-        vtk_count: sheet.vtk_count,
-        soldering_count: sheet.soldering_count,
-        lacquering_count: sheet.lacquering_count,
-        stamping_count: sheet.stamping_count,
-        fuse_soldering_count: sheet.fuse_soldering_count,
-        defect_count: sheet.defect_count,
+        vtk_count: sheet.vtk_count || 0,
+        soldering_count: sheet.soldering_count || 0,
+        lacquering_count: sheet.lacquering_count || 0,
+        stamping_count: sheet.stamping_count || 0,
+        fuse_soldering_count: sheet.fuse_soldering_count || 0,
+        defect_count: sheet.defect_count || 0,
       })
-      setSelectedMaterials(sheet.materials || {})
     } else {
       resetForm()
     }
     setIsModalOpen(true)
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    setSaving(true)
     const total = calculateTotal(formData)
     
-    if (editingSheet) {
-      setRouteSheets(routeSheets.map(s => 
-        s.id === editingSheet.id 
-          ? { ...s, ...formData, total_amount: total, materials: selectedMaterials }
-          : s
-      ))
-    } else {
-      const newSheet = {
-        id: Date.now(),
-        ...formData,
-        employee_id: parseInt(formData.employee_id),
-        total_amount: total,
-        materials: selectedMaterials,
-        created_at: new Date().toISOString(),
+    try {
+      if (editingSheet) {
+        // UPDATE
+        const { data, error } = await supabase
+          .from('route_sheets')
+          .update({
+            employee_id: parseInt(formData.employee_id),
+            vtk_count: formData.vtk_count,
+            soldering_count: formData.soldering_count,
+            lacquering_count: formData.lacquering_count,
+            stamping_count: formData.stamping_count,
+            fuse_soldering_count: formData.fuse_soldering_count,
+            defect_count: formData.defect_count,
+            total_amount: total,
+          })
+          .eq('id', editingSheet.id)
+          .select()
+          .single()
+        
+        if (error) throw error
+        
+        setRouteSheets(routeSheets.map(s => s.id === editingSheet.id ? data : s))
+      } else {
+        // INSERT
+        const { data, error } = await supabase
+          .from('route_sheets')
+          .insert({
+            employee_id: parseInt(formData.employee_id),
+            vtk_count: formData.vtk_count,
+            soldering_count: formData.soldering_count,
+            lacquering_count: formData.lacquering_count,
+            stamping_count: formData.stamping_count,
+            fuse_soldering_count: formData.fuse_soldering_count,
+            defect_count: formData.defect_count,
+            total_amount: total,
+          })
+          .select()
+          .single()
+        
+        if (error) throw error
+        
+        setRouteSheets([data, ...routeSheets])
       }
-      setRouteSheets([newSheet, ...routeSheets])
       
-      // Списуємо матеріали зі складу
-      Object.entries(selectedMaterials).forEach(([stage, items]) => {
-        items.forEach(item => {
-          setInventory(inv => inv.map(i => 
-            i.id === item.inventory_id
-              ? { ...i, quantity: i.quantity - item.quantity }
-              : i
-          ))
-        })
-      })
+      setIsModalOpen(false)
+      resetForm()
+    } catch (error) {
+      console.error('Error saving:', error)
+      alert('Помилка збереження: ' + error.message)
+    } finally {
+      setSaving(false)
     }
-    
-    setIsModalOpen(false)
-    resetForm()
   }
 
-  const handleDelete = (id) => {
-    if (confirm('Видалити цей маршрутний лист?')) {
+  const handleDelete = async (id) => {
+    if (!confirm('Видалити цей маршрутний лист?')) return
+    
+    try {
+      const { error } = await supabase
+        .from('route_sheets')
+        .delete()
+        .eq('id', id)
+      
+      if (error) throw error
+      
       setRouteSheets(routeSheets.filter(s => s.id !== id))
+    } catch (error) {
+      console.error('Error deleting:', error)
+      alert('Помилка видалення: ' + error.message)
     }
-  }
-
-  const addMaterial = (stage, inventoryId, quantity) => {
-    const invItem = inventory.find(i => i.id === inventoryId)
-    if (!invItem) return
-    
-    setSelectedMaterials(prev => ({
-      ...prev,
-      [stage]: [
-        ...(prev[stage] || []),
-        { inventory_id: inventoryId, name: invItem.name, quantity }
-      ]
-    }))
-  }
-
-  const removeMaterial = (stage, index) => {
-    setSelectedMaterials(prev => ({
-      ...prev,
-      [stage]: prev[stage].filter((_, i) => i !== index)
-    }))
   }
 
   const currentTotal = calculateTotal(formData)
+
+  if (loading) return <LoadingSpinner />
 
   return (
     <div className="animate-fadeIn">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-white">Маршрутні листи</h2>
-        <button onClick={() => openModal()} className="btn btn-primary">
-          <Plus className="w-4 h-4" />
-          Новий лист
-        </button>
+        <div className="flex gap-2">
+          <button onClick={refreshData} className="btn btn-secondary">
+            <RefreshCw className="w-4 h-4" />
+          </button>
+          <button onClick={() => openModal()} className="btn btn-primary">
+            <Plus className="w-4 h-4" />
+            Новий лист
+          </button>
+        </div>
       </div>
 
-      {/* Table */}
       <div className="table-container">
         <table className="table">
           <thead>
@@ -425,11 +439,11 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, inventory, setInv
                     {new Date(sheet.created_at).toLocaleDateString('uk-UA')}
                   </td>
                   <td className="text-white font-medium">{employee?.name || '—'}</td>
-                  <td>{sheet.vtk_count}</td>
-                  <td>{sheet.soldering_count}</td>
-                  <td>{sheet.lacquering_count}</td>
-                  <td>{sheet.stamping_count}</td>
-                  <td>{sheet.fuse_soldering_count}</td>
+                  <td>{sheet.vtk_count || 0}</td>
+                  <td>{sheet.soldering_count || 0}</td>
+                  <td>{sheet.lacquering_count || 0}</td>
+                  <td>{sheet.stamping_count || 0}</td>
+                  <td>{sheet.fuse_soldering_count || 0}</td>
                   <td>
                     {sheet.defect_count > 0 ? (
                       <span className="badge badge-danger">{sheet.defect_count}</span>
@@ -438,7 +452,7 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, inventory, setInv
                     )}
                   </td>
                   <td className="text-emerald-400 font-semibold">
-                    {sheet.total_amount?.toFixed(2)}₴
+                    {parseFloat(sheet.total_amount || 0).toFixed(2)}₴
                   </td>
                   <td>
                     <div className="flex items-center gap-2">
@@ -491,7 +505,6 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, inventory, setInv
             </div>
             
             <div className="p-4 space-y-4">
-              {/* Employee Select */}
               <div>
                 <label className="label">Працівник</label>
                 <select
@@ -506,7 +519,6 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, inventory, setInv
                 </select>
               </div>
               
-              {/* Stages */}
               <div className="grid grid-cols-2 gap-4">
                 {Object.entries(STAGE_NAMES).map(([key, name]) => (
                   <div key={key} className="bg-zinc-800/50 rounded-lg p-3">
@@ -525,44 +537,10 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, inventory, setInv
                       className="input"
                       placeholder="Кількість"
                     />
-                    
-                    {/* Materials for stage */}
-                    <div className="mt-2">
-                      <div className="flex items-center gap-2 mb-2">
-                        <select
-                          className="input text-sm py-1"
-                          onChange={(e) => {
-                            if (e.target.value) {
-                              addMaterial(key, parseInt(e.target.value), 1)
-                              e.target.value = ''
-                            }
-                          }}
-                        >
-                          <option value="">+ Матеріал</option>
-                          {inventory.map(item => (
-                            <option key={item.id} value={item.id}>
-                              {item.name} ({item.quantity} {item.unit})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      {selectedMaterials[key]?.map((mat, idx) => (
-                        <div key={idx} className="flex items-center gap-2 text-xs text-zinc-400 mb-1">
-                          <span>{mat.name}: {mat.quantity}</span>
-                          <button
-                            onClick={() => removeMaterial(key, idx)}
-                            className="text-red-400 hover:text-red-300"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
                   </div>
                 ))}
               </div>
               
-              {/* Defects */}
               <div>
                 <label className="label">Кількість браку</label>
                 <input
@@ -578,7 +556,6 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, inventory, setInv
                 />
               </div>
               
-              {/* Total */}
               <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-lg p-4">
                 <div className="flex items-center justify-between">
                   <span className="text-emerald-400 font-medium">Загальна сума:</span>
@@ -598,11 +575,11 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, inventory, setInv
               </button>
               <button
                 onClick={handleSave}
-                disabled={!formData.employee_id}
+                disabled={!formData.employee_id || saving}
                 className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Save className="w-4 h-4" />
-                Зберегти
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                {saving ? 'Збереження...' : 'Зберегти'}
               </button>
             </div>
           </div>
@@ -613,9 +590,10 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, inventory, setInv
 }
 
 // ==================== EMPLOYEES ====================
-function Employees({ employees, setEmployees }) {
+function Employees({ employees, setEmployees, loading, refreshData }) {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingEmployee, setEditingEmployee] = useState(null)
+  const [saving, setSaving] = useState(false)
   const [formData, setFormData] = useState({ name: '', position: '' })
 
   const resetForm = () => {
@@ -633,32 +611,76 @@ function Employees({ employees, setEmployees }) {
     setIsModalOpen(true)
   }
 
-  const handleSave = () => {
-    if (editingEmployee) {
-      setEmployees(employees.map(e => 
-        e.id === editingEmployee.id ? { ...e, ...formData } : e
-      ))
-    } else {
-      setEmployees([...employees, { id: Date.now(), ...formData }])
+  const handleSave = async () => {
+    setSaving(true)
+    
+    try {
+      if (editingEmployee) {
+        const { data, error } = await supabase
+          .from('employees')
+          .update(formData)
+          .eq('id', editingEmployee.id)
+          .select()
+          .single()
+        
+        if (error) throw error
+        
+        setEmployees(employees.map(e => e.id === editingEmployee.id ? data : e))
+      } else {
+        const { data, error } = await supabase
+          .from('employees')
+          .insert(formData)
+          .select()
+          .single()
+        
+        if (error) throw error
+        
+        setEmployees([...employees, data])
+      }
+      
+      setIsModalOpen(false)
+      resetForm()
+    } catch (error) {
+      console.error('Error saving:', error)
+      alert('Помилка збереження: ' + error.message)
+    } finally {
+      setSaving(false)
     }
-    setIsModalOpen(false)
-    resetForm()
   }
 
-  const handleDelete = (id) => {
-    if (confirm('Видалити цього працівника?')) {
+  const handleDelete = async (id) => {
+    if (!confirm('Видалити цього працівника?')) return
+    
+    try {
+      const { error } = await supabase
+        .from('employees')
+        .delete()
+        .eq('id', id)
+      
+      if (error) throw error
+      
       setEmployees(employees.filter(e => e.id !== id))
+    } catch (error) {
+      console.error('Error deleting:', error)
+      alert('Помилка видалення: ' + error.message)
     }
   }
+
+  if (loading) return <LoadingSpinner />
 
   return (
     <div className="animate-fadeIn">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-white">Працівники</h2>
-        <button onClick={() => openModal()} className="btn btn-primary">
-          <Plus className="w-4 h-4" />
-          Додати працівника
-        </button>
+        <div className="flex gap-2">
+          <button onClick={refreshData} className="btn btn-secondary">
+            <RefreshCw className="w-4 h-4" />
+          </button>
+          <button onClick={() => openModal()} className="btn btn-primary">
+            <Plus className="w-4 h-4" />
+            Додати працівника
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -752,11 +774,11 @@ function Employees({ employees, setEmployees }) {
               </button>
               <button
                 onClick={handleSave}
-                disabled={!formData.name}
+                disabled={!formData.name || saving}
                 className="btn btn-primary disabled:opacity-50"
               >
-                <Save className="w-4 h-4" />
-                Зберегти
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                {saving ? 'Збереження...' : 'Зберегти'}
               </button>
             </div>
           </div>
@@ -767,9 +789,10 @@ function Employees({ employees, setEmployees }) {
 }
 
 // ==================== INVENTORY ====================
-function Inventory({ inventory, setInventory }) {
+function Inventory({ inventory, setInventory, loading, refreshData }) {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingItem, setEditingItem] = useState(null)
+  const [saving, setSaving] = useState(false)
   const [formData, setFormData] = useState({ name: '', quantity: 0, unit: 'шт', min_quantity: 0 })
 
   const resetForm = () => {
@@ -792,21 +815,58 @@ function Inventory({ inventory, setInventory }) {
     setIsModalOpen(true)
   }
 
-  const handleSave = () => {
-    if (editingItem) {
-      setInventory(inventory.map(i => 
-        i.id === editingItem.id ? { ...i, ...formData } : i
-      ))
-    } else {
-      setInventory([...inventory, { id: Date.now(), ...formData }])
+  const handleSave = async () => {
+    setSaving(true)
+    
+    try {
+      if (editingItem) {
+        const { data, error } = await supabase
+          .from('inventory')
+          .update(formData)
+          .eq('id', editingItem.id)
+          .select()
+          .single()
+        
+        if (error) throw error
+        
+        setInventory(inventory.map(i => i.id === editingItem.id ? data : i))
+      } else {
+        const { data, error } = await supabase
+          .from('inventory')
+          .insert(formData)
+          .select()
+          .single()
+        
+        if (error) throw error
+        
+        setInventory([...inventory, data])
+      }
+      
+      setIsModalOpen(false)
+      resetForm()
+    } catch (error) {
+      console.error('Error saving:', error)
+      alert('Помилка збереження: ' + error.message)
+    } finally {
+      setSaving(false)
     }
-    setIsModalOpen(false)
-    resetForm()
   }
 
-  const handleDelete = (id) => {
-    if (confirm('Видалити цю позицію?')) {
+  const handleDelete = async (id) => {
+    if (!confirm('Видалити цю позицію?')) return
+    
+    try {
+      const { error } = await supabase
+        .from('inventory')
+        .delete()
+        .eq('id', id)
+      
+      if (error) throw error
+      
       setInventory(inventory.filter(i => i.id !== id))
+    } catch (error) {
+      console.error('Error deleting:', error)
+      alert('Помилка видалення: ' + error.message)
     }
   }
 
@@ -816,14 +876,21 @@ function Inventory({ inventory, setInventory }) {
     return 'ok'
   }
 
+  if (loading) return <LoadingSpinner />
+
   return (
     <div className="animate-fadeIn">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-white">Склад</h2>
-        <button onClick={() => openModal()} className="btn btn-primary">
-          <Plus className="w-4 h-4" />
-          Додати позицію
-        </button>
+        <div className="flex gap-2">
+          <button onClick={refreshData} className="btn btn-secondary">
+            <RefreshCw className="w-4 h-4" />
+          </button>
+          <button onClick={() => openModal()} className="btn btn-primary">
+            <Plus className="w-4 h-4" />
+            Додати позицію
+          </button>
+        </div>
       </div>
 
       <div className="table-container">
@@ -881,6 +948,17 @@ function Inventory({ inventory, setInventory }) {
             })}
           </tbody>
         </table>
+        
+        {inventory.length === 0 && (
+          <div className="text-center py-12 text-zinc-500">
+            <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
+            <p>Склад порожній</p>
+            <button onClick={() => openModal()} className="btn btn-primary mt-4">
+              <Plus className="w-4 h-4" />
+              Додати перший матеріал
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Modal */}
@@ -948,9 +1026,9 @@ function Inventory({ inventory, setInventory }) {
               <button onClick={() => { setIsModalOpen(false); resetForm(); }} className="btn btn-secondary">
                 Скасувати
               </button>
-              <button onClick={handleSave} disabled={!formData.name} className="btn btn-primary disabled:opacity-50">
-                <Save className="w-4 h-4" />
-                Зберегти
+              <button onClick={handleSave} disabled={!formData.name || saving} className="btn btn-primary disabled:opacity-50">
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                {saving ? 'Збереження...' : 'Зберегти'}
               </button>
             </div>
           </div>
@@ -961,32 +1039,32 @@ function Inventory({ inventory, setInventory }) {
 }
 
 // ==================== ANALYTICS ====================
-function Analytics({ routeSheets, employees, inventory }) {
+function Analytics({ routeSheets, employees, inventory, loading }) {
+  if (loading) return <LoadingSpinner />
+  
   const now = new Date()
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
   const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
   
-  // Статистика по працівниках за тиждень
   const weeklyStats = employees.map(emp => {
     const empSheets = routeSheets.filter(
       s => s.employee_id === emp.id && new Date(s.created_at) >= weekAgo
     )
     const totalOps = empSheets.reduce((sum, s) => 
-      sum + s.vtk_count + s.soldering_count + s.lacquering_count + s.stamping_count + s.fuse_soldering_count, 0
+      sum + (s.vtk_count||0) + (s.soldering_count||0) + (s.lacquering_count||0) + (s.stamping_count||0) + (s.fuse_soldering_count||0), 0
     )
-    const totalDefects = empSheets.reduce((sum, s) => sum + s.defect_count, 0)
+    const totalDefects = empSheets.reduce((sum, s) => sum + (s.defect_count||0), 0)
     
     return {
       name: emp.name,
       sheets: empSheets.length,
-      earnings: empSheets.reduce((sum, s) => sum + (s.total_amount || 0), 0),
+      earnings: empSheets.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0),
       operations: totalOps,
       defects: totalDefects,
       defectRate: totalOps > 0 ? ((totalDefects / totalOps) * 100).toFixed(2) : 0,
     }
   })
   
-  // Статистика по працівниках за місяць
   const monthlyStats = employees.map(emp => {
     const empSheets = routeSheets.filter(
       s => s.employee_id === emp.id && new Date(s.created_at) >= monthAgo
@@ -994,20 +1072,18 @@ function Analytics({ routeSheets, employees, inventory }) {
     return {
       name: emp.name,
       sheets: empSheets.length,
-      earnings: empSheets.reduce((sum, s) => sum + (s.total_amount || 0), 0),
+      earnings: empSheets.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0),
     }
   })
   
-  // Статистика браку по етапах
   const defectsByEmployee = employees.map(emp => {
     const empSheets = routeSheets.filter(s => s.employee_id === emp.id)
     return {
       name: emp.name.split(' ')[0],
-      defects: empSheets.reduce((sum, s) => sum + s.defect_count, 0),
+      defects: empSheets.reduce((sum, s) => sum + (s.defect_count||0), 0),
     }
   })
   
-  // Тренд виробництва по днях
   const last7Days = [...Array(7)].map((_, i) => {
     const date = new Date(now)
     date.setDate(date.getDate() - (6 - i))
@@ -1017,18 +1093,15 @@ function Analytics({ routeSheets, employees, inventory }) {
     })
     return {
       date: date.toLocaleDateString('uk-UA', { weekday: 'short', day: 'numeric' }),
-      earnings: daySheets.reduce((sum, s) => sum + (s.total_amount || 0), 0),
+      earnings: daySheets.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0),
       sheets: daySheets.length,
     }
   })
-  
-  const COLORS = ['#0ea5e9', '#8b5cf6', '#22c55e', '#f59e0b', '#ef4444']
 
   return (
     <div className="animate-fadeIn space-y-6">
       <h2 className="text-2xl font-bold text-white">Аналітика</h2>
       
-      {/* Weekly Stats */}
       <div className="card">
         <h3 className="text-lg font-semibold text-white mb-4">Виробництво за тиждень</h3>
         <div className="table-container">
@@ -1069,7 +1142,6 @@ function Analytics({ routeSheets, employees, inventory }) {
         </div>
       </div>
       
-      {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="card">
           <h3 className="text-lg font-semibold text-white mb-4">Тренд заробітку (7 днів)</h3>
@@ -1117,7 +1189,6 @@ function Analytics({ routeSheets, employees, inventory }) {
         </div>
       </div>
       
-      {/* Monthly Stats */}
       <div className="card">
         <h3 className="text-lg font-semibold text-white mb-4">Виробництво за місяць</h3>
         <ResponsiveContainer width="100%" height={300}>
@@ -1137,7 +1208,6 @@ function Analytics({ routeSheets, employees, inventory }) {
         </ResponsiveContainer>
       </div>
       
-      {/* Inventory Status */}
       <div className="card">
         <h3 className="text-lg font-semibold text-white mb-4">Статус складу</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1183,51 +1253,77 @@ function Analytics({ routeSheets, employees, inventory }) {
 // ==================== MAIN APP ====================
 export default function Home() {
   const [activeTab, setActiveTab] = useState('dashboard')
-  const [employees, setEmployees] = useState(INITIAL_EMPLOYEES)
-  const [inventory, setInventory] = useState(INITIAL_INVENTORY)
-  const [routeSheets, setRouteSheets] = useState([
-    {
-      id: 1,
-      employee_id: 1,
-      created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
-      vtk_count: 10,
-      soldering_count: 8,
-      lacquering_count: 7,
-      stamping_count: 100,
-      fuse_soldering_count: 15,
-      defect_count: 2,
-      total_amount: 10*15 + 8*27 + 7*15 + 100*0.25 + 15*1,
-    },
-    {
-      id: 2,
-      employee_id: 2,
-      created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-      vtk_count: 12,
-      soldering_count: 10,
-      lacquering_count: 9,
-      stamping_count: 80,
-      fuse_soldering_count: 20,
-      defect_count: 1,
-      total_amount: 12*15 + 10*27 + 9*15 + 80*0.25 + 20*1,
-    },
-    {
-      id: 3,
-      employee_id: 3,
-      created_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-      vtk_count: 15,
-      soldering_count: 12,
-      lacquering_count: 11,
-      stamping_count: 120,
-      fuse_soldering_count: 25,
-      defect_count: 0,
-      total_amount: 15*15 + 12*27 + 11*15 + 120*0.25 + 25*1,
-    },
-  ])
+  const [employees, setEmployees] = useState([])
+  const [inventory, setInventory] = useState([])
+  const [routeSheets, setRouteSheets] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  // Функція завантаження даних
+  const fetchData = async () => {
+    setLoading(true)
+    setError(null)
+    
+    try {
+      // Завантажуємо працівників
+      const { data: empData, error: empError } = await supabase
+        .from('employees')
+        .select('*')
+        .order('name')
+      
+      if (empError) throw empError
+      setEmployees(empData || [])
+      
+      // Завантажуємо склад
+      const { data: invData, error: invError } = await supabase
+        .from('inventory')
+        .select('*')
+        .order('name')
+      
+      if (invError) throw invError
+      setInventory(invData || [])
+      
+      // Завантажуємо маршрутні листи
+      const { data: sheetData, error: sheetError } = await supabase
+        .from('route_sheets')
+        .select('*')
+        .order('created_at', { ascending: false })
+      
+      if (sheetError) throw sheetError
+      setRouteSheets(sheetData || [])
+      
+    } catch (err) {
+      console.error('Error fetching data:', err)
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Завантажуємо дані при першому рендері
+  useEffect(() => {
+    fetchData()
+  }, [])
 
   const renderContent = () => {
+    if (error) {
+      return (
+        <div className="flex flex-col items-center justify-center py-12">
+          <AlertCircle className="w-12 h-12 text-red-400 mb-4" />
+          <h3 className="text-xl font-semibold text-white mb-2">Помилка підключення</h3>
+          <p className="text-zinc-400 mb-4 text-center max-w-md">{error}</p>
+          <p className="text-zinc-500 text-sm mb-4">Перевірте налаштування Supabase</p>
+          <button onClick={fetchData} className="btn btn-primary">
+            <RefreshCw className="w-4 h-4" />
+            Спробувати знову
+          </button>
+        </div>
+      )
+    }
+    
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard routeSheets={routeSheets} employees={employees} inventory={inventory} />
+        return <Dashboard routeSheets={routeSheets} employees={employees} inventory={inventory} loading={loading} />
       case 'route-sheets':
         return <RouteSheets 
           routeSheets={routeSheets} 
@@ -1235,15 +1331,17 @@ export default function Home() {
           employees={employees}
           inventory={inventory}
           setInventory={setInventory}
+          loading={loading}
+          refreshData={fetchData}
         />
       case 'employees':
-        return <Employees employees={employees} setEmployees={setEmployees} />
+        return <Employees employees={employees} setEmployees={setEmployees} loading={loading} refreshData={fetchData} />
       case 'inventory':
-        return <Inventory inventory={inventory} setInventory={setInventory} />
+        return <Inventory inventory={inventory} setInventory={setInventory} loading={loading} refreshData={fetchData} />
       case 'analytics':
-        return <Analytics routeSheets={routeSheets} employees={employees} inventory={inventory} />
+        return <Analytics routeSheets={routeSheets} employees={employees} inventory={inventory} loading={loading} />
       default:
-        return <Dashboard routeSheets={routeSheets} employees={employees} inventory={inventory} />
+        return <Dashboard routeSheets={routeSheets} employees={employees} inventory={inventory} loading={loading} />
     }
   }
 
