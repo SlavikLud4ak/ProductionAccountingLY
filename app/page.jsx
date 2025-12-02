@@ -285,16 +285,18 @@ function Dashboard({ routeSheets, employees, inventory, loading, setIsOpen }) {
 }
 
 // ==================== ROUTE SHEETS ====================
-function RouteSheets({ routeSheets, setRouteSheets, employees, loading, refreshData, setIsOpen }) {
+function RouteSheets({ routeSheets, setRouteSheets, employees, inventory, setInventory, loading, refreshData, setIsOpen }) {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingSheet, setEditingSheet] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [selectedMaterials, setSelectedMaterials] = useState({})
   const [formData, setFormData] = useState({
     employee_id: '', vtk_count: 0, soldering_count: 0, lacquering_count: 0, stamping_count: 0, fuse_soldering_count: 0, defect_count: 0,
   })
 
   const resetForm = () => {
     setFormData({ employee_id: '', vtk_count: 0, soldering_count: 0, lacquering_count: 0, stamping_count: 0, fuse_soldering_count: 0, defect_count: 0 })
+    setSelectedMaterials({})
     setEditingSheet(null)
   }
 
@@ -306,8 +308,25 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, loading, refreshD
         lacquering_count: sheet.lacquering_count || 0, stamping_count: sheet.stamping_count || 0,
         fuse_soldering_count: sheet.fuse_soldering_count || 0, defect_count: sheet.defect_count || 0,
       })
+      setSelectedMaterials(sheet.materials || {})
     } else { resetForm() }
     setIsModalOpen(true)
+  }
+
+  const addMaterial = (stage, inventoryId, quantity) => {
+    const invItem = inventory.find(i => i.id === parseInt(inventoryId))
+    if (!invItem || quantity <= 0) return
+    setSelectedMaterials(prev => ({
+      ...prev,
+      [stage]: [...(prev[stage] || []), { inventory_id: invItem.id, name: invItem.name, quantity: quantity, unit: invItem.unit }]
+    }))
+  }
+
+  const removeMaterial = (stage, index) => {
+    setSelectedMaterials(prev => ({
+      ...prev,
+      [stage]: prev[stage].filter((_, i) => i !== index)
+    }))
   }
 
   const handleSave = async () => {
@@ -321,7 +340,7 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, loading, refreshD
           fuse_soldering_count: formData.fuse_soldering_count, defect_count: formData.defect_count, total_amount: total,
         }).eq('id', editingSheet.id).select().single()
         if (error) throw error
-        setRouteSheets(routeSheets.map(s => s.id === editingSheet.id ? data : s))
+        setRouteSheets(routeSheets.map(s => s.id === editingSheet.id ? { ...data, materials: selectedMaterials } : s))
       } else {
         const { data, error } = await supabase.from('route_sheets').insert({
           employee_id: parseInt(formData.employee_id), vtk_count: formData.vtk_count, soldering_count: formData.soldering_count,
@@ -329,7 +348,20 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, loading, refreshD
           fuse_soldering_count: formData.fuse_soldering_count, defect_count: formData.defect_count, total_amount: total,
         }).select().single()
         if (error) throw error
-        setRouteSheets([data, ...routeSheets])
+        
+        // Списуємо матеріали зі складу
+        for (const stage of Object.keys(selectedMaterials)) {
+          for (const mat of selectedMaterials[stage]) {
+            const invItem = inventory.find(i => i.id === mat.inventory_id)
+            if (invItem) {
+              const newQty = Math.max(0, invItem.quantity - mat.quantity)
+              await supabase.from('inventory').update({ quantity: newQty }).eq('id', mat.inventory_id)
+              setInventory(prev => prev.map(i => i.id === mat.inventory_id ? { ...i, quantity: newQty } : i))
+            }
+          }
+        }
+        
+        setRouteSheets([{ ...data, materials: selectedMaterials }, ...routeSheets])
       }
       setIsModalOpen(false)
       resetForm()
@@ -436,7 +468,7 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, loading, refreshD
       {/* Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/70 flex items-end lg:items-center justify-center z-50">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-t-xl lg:rounded-xl w-full lg:max-w-lg max-h-[85vh] overflow-y-auto">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-t-xl lg:rounded-xl w-full lg:max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-4 border-b border-zinc-700 sticky top-0 bg-zinc-900 z-10">
               <h3 className="text-lg font-semibold text-white">{editingSheet ? 'Редагувати' : 'Новий лист'}</h3>
               <button onClick={() => { setIsModalOpen(false); resetForm() }} className="p-1 hover:bg-zinc-700 rounded-lg"><X className="w-5 h-5" /></button>
@@ -449,18 +481,92 @@ function RouteSheets({ routeSheets, setRouteSheets, employees, loading, refreshD
                   {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
                 </select>
               </div>
-              <div className="grid grid-cols-2 gap-2">
+              
+              {/* Етапи з можливістю додавання матеріалів */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {Object.entries(STAGE_NAMES).map(([key, name]) => (
                   <div key={key} className="bg-zinc-800/50 rounded-lg p-2">
                     <label className="label text-xs flex justify-between"><span>{name}</span><span className="text-sky-400">{STAGE_PRICES[key]}₴</span></label>
-                    <input type="number" min="0" value={formData[`${key}_count`]} onChange={(e) => setFormData({ ...formData, [`${key}_count`]: parseInt(e.target.value) || 0 })} className="input py-2" />
+                    <input type="number" min="0" value={formData[`${key}_count`]} onChange={(e) => setFormData({ ...formData, [`${key}_count`]: parseInt(e.target.value) || 0 })} className="input py-2 mb-2" placeholder="Кількість" />
+                    
+                    {/* Вибір матеріалу */}
+                    <div className="flex gap-1 mb-1">
+                      <select 
+                        id={`material-select-${key}`}
+                        className="input py-1 text-xs flex-1"
+                        defaultValue=""
+                      >
+                        <option value="">+ Матеріал</option>
+                        {inventory.map(item => (
+                          <option key={item.id} value={item.id}>
+                            {item.name} ({item.quantity} {item.unit})
+                          </option>
+                        ))}
+                      </select>
+                      <input 
+                        type="number" 
+                        id={`material-qty-${key}`}
+                        min="1" 
+                        defaultValue="1"
+                        className="input py-1 text-xs w-16"
+                        placeholder="К-сть"
+                      />
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          const select = document.getElementById(`material-select-${key}`)
+                          const qtyInput = document.getElementById(`material-qty-${key}`)
+                          if (select.value) {
+                            addMaterial(key, select.value, parseInt(qtyInput.value) || 1)
+                            select.value = ''
+                            qtyInput.value = '1'
+                          }
+                        }}
+                        className="btn btn-secondary py-1 px-2 text-xs"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                    </div>
+                    
+                    {/* Список доданих матеріалів */}
+                    {selectedMaterials[key]?.length > 0 && (
+                      <div className="space-y-1 mt-1">
+                        {selectedMaterials[key].map((mat, idx) => (
+                          <div key={idx} className="flex items-center justify-between text-xs bg-zinc-700/50 rounded px-2 py-1">
+                            <span className="text-zinc-300 truncate">{mat.name}: {mat.quantity} {mat.unit}</span>
+                            <button onClick={() => removeMaterial(key, idx)} className="text-red-400 hover:text-red-300 ml-1">
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
+              
               <div>
                 <label className="label">Брак</label>
                 <input type="number" min="0" value={formData.defect_count} onChange={(e) => setFormData({ ...formData, defect_count: parseInt(e.target.value) || 0 })} className="input" />
               </div>
+              
+              {/* Підсумок списання матеріалів */}
+              {Object.keys(selectedMaterials).some(k => selectedMaterials[k]?.length > 0) && (
+                <div className="bg-amber-900/20 border border-amber-500/30 rounded-lg p-3">
+                  <p className="text-amber-400 text-sm font-medium mb-2">Буде списано зі складу:</p>
+                  <div className="space-y-1 text-xs">
+                    {Object.entries(selectedMaterials).map(([stage, materials]) => 
+                      materials?.map((mat, idx) => (
+                        <div key={`${stage}-${idx}`} className="flex justify-between text-zinc-300">
+                          <span>{mat.name}</span>
+                          <span>-{mat.quantity} {mat.unit}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+              
               <div className="bg-emerald-900/30 border border-emerald-500/30 rounded-lg p-3">
                 <div className="flex items-center justify-between">
                   <span className="text-emerald-400">Сума:</span>
@@ -884,7 +990,7 @@ export default function Home() {
     
     switch (activeTab) {
       case 'dashboard': return <Dashboard routeSheets={routeSheets} employees={employees} inventory={inventory} {...props} />
-      case 'route-sheets': return <RouteSheets routeSheets={routeSheets} setRouteSheets={setRouteSheets} employees={employees} {...props} />
+      case 'route-sheets': return <RouteSheets routeSheets={routeSheets} setRouteSheets={setRouteSheets} employees={employees} inventory={inventory} setInventory={setInventory} {...props} />
       case 'employees': return <Employees employees={employees} setEmployees={setEmployees} {...props} />
       case 'inventory': return <Inventory inventory={inventory} setInventory={setInventory} {...props} />
       case 'analytics': return <Analytics routeSheets={routeSheets} employees={employees} inventory={inventory} {...props} />
